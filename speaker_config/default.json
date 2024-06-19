@@ -1,0 +1,6 @@
+{
+    "spk_model": "./speaker_config/model/default.pt",
+    "temperature": 0.3,
+    "top_P": 0.7,
+    "top_K": 13
+}
