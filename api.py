@@ -91,7 +91,7 @@ def generate_tts_audio(text, spk_id = "default", max_length = 80):
         torch.cuda.empty_cache()
 
     audio = combine_audio(all_wavs)
-    audio = (audio * 32768).astype(np.int16).squeeze()
+    audio = (audio * 32768).astype(np.int16)
 
     end_time = time.time()
     elapsed_time = end_time - start_time

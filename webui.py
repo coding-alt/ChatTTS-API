@@ -93,7 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description='ChatTTS demo Launch')
     parser.add_argument('--server_name', type=str, default='0.0.0.0', help='Server name')
     parser.add_argument('--server_port', type=int, default=8080, help='Server port')
-    parser.add_argument('--local_path', type=str, default=None, help='the local_path if need')
+    parser.add_argument('--local_path', type=str, default='./models', help='the local_path if need')
     args = parser.parse_args()
 
     print("loading ChatTTS model...")
@@ -104,7 +104,7 @@ def main():
         chat.load_models()
     else:
         print('local model path:', args.local_path)
-        chat.load_models('local', local_path=args.local_path)
+        chat.load_models('local', local_path=args.local_path, force_redownload=False, compile=False)
 
     demo.launch(server_name=args.server_name, server_port=args.server_port, inbrowser=True)
 
