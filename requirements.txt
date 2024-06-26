@@ -12,3 +12,9 @@ loguru
 pypinyin
 Cython
 LangSegment
+
+jieba
+cn2an
+WeTextProcessing
+langchain_text_splitters
+noisereduce

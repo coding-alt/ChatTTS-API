@@ -15,7 +15,7 @@ import uvicorn
 
 import argparse
 from loguru import logger
-from utils import split_text, combine_audio, pack_audio, batch_split
+from utils import split_text, combine_audio, reduce_noise, pack_audio, batch_split
 
 class TTS(BaseModel):
     """TTS GET/POST request"""
@@ -91,6 +91,7 @@ def generate_tts_audio(text, spk_id = "default", max_length = 80):
         torch.cuda.empty_cache()
 
     audio = combine_audio(all_wavs)
+    audio = reduce_noise(audio, 24000)
     audio = (audio * 32768).astype(np.int16)
 
     end_time = time.time()
@@ -102,7 +103,7 @@ def generate_tts_audio(text, spk_id = "default", max_length = 80):
 def tts_handle(params: TTS):
     logger.debug(params)
 
-    audio_data = generate_tts_audio(params.text, params.spk_id, 120)
+    audio_data = generate_tts_audio(params.text, params.spk_id)
     sr = 24000
     audio_data = pack_audio(BytesIO(), audio_data, sr, params.media_type).getvalue()
 
