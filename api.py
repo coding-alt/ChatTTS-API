@@ -15,7 +15,8 @@ import uvicorn
 
 import argparse
 from loguru import logger
-from utils import split_text, combine_audio, reduce_noise, pack_audio, batch_split
+from utils import split_text, combine_audio, pack_audio, batch_split
+from resemble_enhance.enhancer.inference import denoise, enhance
 
 class TTS(BaseModel):
     """TTS GET/POST request"""
@@ -35,7 +36,9 @@ args = None
 
 speaker = {}
 
-def generate_tts_audio(text, spk_id = "default", max_length = 80):
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def generate_tts_audio(text, spk_id = "default", max_length = 80, batch_size = 4):
     if spk_id is None or spk_id == "random" or speaker.get(spk_id) is None:
         print("load spk random")
         spk_emb = chat.sample_random_speaker()
@@ -83,7 +86,6 @@ def generate_tts_audio(text, spk_id = "default", max_length = 80):
     all_wavs = []
     texts = split_text(text, max_length)
 
-    batch_size = 4
     for batch in batch_split(texts, batch_size):
         wavs = chat.infer(batch, params_infer_code=params_infer_code, params_refine_text=params_refine_text, use_decoder=True, skip_refine_text=False)
         all_wavs.extend(wavs)
@@ -91,7 +93,13 @@ def generate_tts_audio(text, spk_id = "default", max_length = 80):
         torch.cuda.empty_cache()
 
     audio = combine_audio(all_wavs)
-    audio = reduce_noise(audio, 24000)
+    sr = 44100
+    # 增强
+    dwav = torch.from_numpy(audio)
+    dwav, _ = enhance(dwav, sr, device, 64, 'midpoint', 0.1, 0.5)
+    # dwav, _ = denoise(dwav, sr, device)
+    audio = dwav.cpu().numpy()
+
     audio = (audio * 32768).astype(np.int16)
 
     end_time = time.time()

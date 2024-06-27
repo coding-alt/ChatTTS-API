@@ -6,12 +6,6 @@ from io import BytesIO
 import soundfile as sf
 import subprocess
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import noisereduce as nr
-
-def reduce_noise(audio, sr):
-    # 使用 noisereduce 库去除噪音
-    reduced_audio = nr.reduce_noise(y=audio, sr=sr)
-    return reduced_audio
 
 def combine_audio(audio_arrays, crossfade_duration=0.1, rate=24000):
     """
@@ -49,7 +43,7 @@ def remove_chinese_punctuation(text):
     :param text:
     :return:
     """
-    chinese_punctuation_pattern = r"[：；！（），【】『』「」《》－‘“’”:,;!\(\)\[\]><\-·]"
+    chinese_punctuation_pattern = r"[：；！？（），【】『』「」《》－‘“’”:,;!\?\(\)\[\]><\-·]"
     text = re.sub(chinese_punctuation_pattern, '，', text)
     # 使用正则表达式将多个连续的句号替换为一个句号
     text = re.sub(r'[。，]{2,}', '。', text)
