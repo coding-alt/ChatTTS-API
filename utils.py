@@ -1,4 +1,5 @@
 import re
+import wave
 import cn2an
 import numpy as np
 import jieba.posseg as pseg
@@ -6,6 +7,24 @@ from io import BytesIO
 import soundfile as sf
 import subprocess
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+def save_audio(audio_save_path, audio, rate=24000):
+    """
+    保存音频文件
+    :param file_name:
+    :param audio:
+    :param rate:
+    :return:
+    """
+    audio = (audio * 32767).astype(np.int16)
+
+    with wave.open(audio_save_path, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(audio.tobytes())
+        
+    return audio_save_path
 
 def combine_audio(audio_arrays, crossfade_duration=0.1, rate=24000):
     """

@@ -10,6 +10,7 @@ import requests
 import uvicorn
 import ChatTTS
 import argparse
+from typing import Optional
 from redis import Redis
 from loguru import logger
 from pydantic import BaseModel
@@ -24,16 +25,17 @@ class TTS(BaseModel):
     """TTS GET/POST request"""
     text: str = Query("欢迎使用ChatTTS API", description="text to synthesize")
     spk_id: str = Query("default", description="音色ID")
-    callback: str = Query(None, description="callback function")
+    group_id: str = Query("aeyes", description="group id")
+    callback: Optional[str] = Query(None, description="callback function")
 
 app = FastAPI()
 
 # Celery配置
-broker_url = "amqps://rabbitmq:rabbitmq@127.0.0.1:5671//?heartbeat=300"
-backend_url = "redis://127.0.0.1:6379/0?socket_timeout=3"
-result_store_url = "redis://127.0.0.1:6379/1?socket_timeout=3"
+broker_url = "amqp://rabbitmq:rabbitmq@127.0.0.1:5672//?heartbeat=300"
+backend_url = "redis://:redis@127.0.0.1:6379/0?socket_timeout=3"
+result_store_url = "redis://:redis@127.0.0.1:6379/1?socket_timeout=3"
 
-celery_app = Celery('tasks', broker=broker_url, backend=backend_url)
+celery_app = Celery('api_v2', broker=broker_url, backend=backend_url)
 celery_app.conf.update(
     task_always_eager=False,
     task_store_eager_result=False,
@@ -70,6 +72,7 @@ def sync_request(url, method='GET', params=None, data=None, json=None, headers=N
                 time.sleep(1)
 
 def generate_tts_audio(text, spk_id="default", max_length=80, batch_size=4, denoise_audio = True, enhance_audio = True):
+    audio_save_path = None
     try:
         if spk_id is None or spk_id == "random" or speaker.get(spk_id) is None:
             print("load spk random")
@@ -151,30 +154,42 @@ def generate_tts_audio(text, spk_id="default", max_length=80, batch_size=4, deno
         return None, error_details
     finally:
         # 删除本地临时文件 
-        os.remove(audio_save_path)
+        if audio_save_path and os.path.exists(audio_save_path):
+            os.remove(audio_save_path)
 
 @celery_app.task(bind=True, max_retries=3, queue="tts_task")
-def tts_handle(self, params: TTS):
-    audio_url, msg = generate_tts_audio(params.text, params.spk_id)
+def tts_handle(self, text, spk_id, group_id, callback):
+    audio_url, msg = generate_tts_audio(text, spk_id)
     task_id = self.request.id
-    if audio_url is not None:
-        result = {'code': 200, 'data': {'task_id': task_id, 'audio_url': audio_url}}  
+    if audio_url is not None: 
+        result = {
+            'task_id': task_id,
+            'state': 'SUCCESS',
+            'data': {
+                'task_id': task_id,
+                'audio_url': audio_url
+            }
+        }
     else:
-        result = {'code': 500, 'msg': msg, 'data': {'task_id': task_id}}
+        result = {
+            'task_id': task_id,
+            'state': 'FAILURE',
+            'msg': msg
+        }
 
-    # 序列化结果并存储，设置1小时的过期时间
+    # 结果写入redis队列
     result_serialized = json.dumps(result)
-    redis_client.set(task_id, result_serialized, ex=3600)
+    redis_client.rpush(group_id, result_serialized)
 
-    if params.callback is not None:
-        sync_request(params.callback, 'POST', data=result)
+    if callback is not None:
+        sync_request(callback, 'POST', data=result)
 
     return result
 
 @app.post("/generate")
 async def generate(params: TTS):
     try:
-        task = tts_handle.apply_async(args=params)
+        task = tts_handle.apply_async(args=[params.text, params.spk_id, params.group_id, params.callback])
         # 更新任务状态为自定义状态：REAL_PENDING
         celery_app.backend.store_result(task_id=task.id, result=None, state='REAL_PENDING')
         return {"code": 200, "msg": "SUCCESS", "data": {"task_id": task.id}}
@@ -212,53 +227,40 @@ def get_pending_task_counts():
     task_count = len(active_tasks) if active_tasks else 0
     return {'code': 200, 'msg': 'success', 'data': {'task_count': task_count}}
 
-@app.get("/get_task_result")
-async def get_task_result(task_id: str):
-    result = redis_client.get(task_id)
-    if result:
-        return {'code': 200, 'msg': 'success', 'data': {'state': 'SUCCESS', 'result': json.loads(result.decode('utf-8'))}}
-    else:
-        return {'code': 200, 'msg': 'success', 'data': {'state': 'NOT_FOUND'}}
-
 @app.get("/get_group_results")
-async def get_group_results(group_id: str, max_results: int):
-    task_ids = redis_client.spop(f'group:{group_id}', count=max_results)
-    
-    if not task_ids:
-        return {'code': 200, 'msg': 'success', 'data': {"state": "SUCCESS", "results": {}}}
+async def get_group_results(group_id: str, limit: int = 10):
+    task_results = []
+    for _ in range(limit):
+        result_raw = redis_client.lpop(group_id)
+        if not result_raw:
+            break
+        try:
+            result_data = json.loads(result_raw.decode('utf-8'))
+            task_results.append(result_data)
+        except json.JSONDecodeError:
+            continue
 
-    task_results_raw = redis_client.mget(task_ids)
-    
-    task_results = {}
-    for task_id, result_raw in zip(task_ids, task_results_raw):
-        if result_raw:
-            try:
-                result = json.loads(result_raw.decode('utf-8'))
-            except json.JSONDecodeError:
-                result = result_raw.decode('utf-8')
-            task_results[task_id] = result
-    
-    return {'code': 200, 'msg': 'success', 'data': {"state": "SUCCESS", "results": task_results}}
+    return {"state": "SUCCESS", "results": task_results}
+
+model_dir = "./models"
+spk_dir = "./speaker_config"
+
+for file in os.listdir(spk_dir):
+    if file.endswith(".json"):
+        logger.debug(f"loading speaker config: {file[:-5]}")
+        with open(os.path.join(spk_dir, file), 'r') as f:
+            config = json.load(f)
+        spk_name = file[:-5]
+        if 'spk_model' in config:
+            speaker[spk_name] = config
+            speaker[spk_name]['emb'] = torch.load(config['spk_model'])
+        else:
+            logger.warning(f"Skipping speaker '{spk_name}' as 'spk_model' field is not found in the configuration.")
+chat.load_models(source="local", force_redownload=False, local_path=model_dir, compile=False)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8002)
-    parser.add_argument("--model-dir", type=str, default="./models")
-    parser.add_argument("--compile", type=bool, default=False)
-    parser.add_argument("--spk-dir", type=str, default="./speaker_config")
     args = parser.parse_args()
-    logger.debug(f"model_dir: {args.model_dir}")
-    for file in os.listdir(args.spk_dir):
-        if file.endswith(".json"):
-            logger.debug(f"loading speaker config: {file[:-5]}")
-            with open(os.path.join(args.spk_dir, file), 'r') as f:
-                config = json.load(f)
-            spk_name = file[:-5]
-            if 'spk_model' in config:
-                speaker[spk_name] = config
-                speaker[spk_name]['emb'] = torch.load(config['spk_model'])
-            else:
-                logger.warning(f"Skipping speaker '{spk_name}' as 'spk_model' field is not found in the configuration.")
-    chat.load_models(source="local", force_redownload=False, local_path=args.model_dir, compile=args.compile)
     uvicorn.run(app, host=args.host, port=args.port)

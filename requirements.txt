@@ -18,3 +18,5 @@ cn2an
 WeTextProcessing
 langchain_text_splitters
 noisereduce
+
+zh_normalization
